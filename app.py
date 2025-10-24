@@ -20,7 +20,7 @@ except Exception:
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="AI Image Generator + Editor", layout="wide")
-st.title("AI Image Generator + Editor (Prompt-only palettes)")
+st.title("AI Image Generator + Editor")
 
 # ---------------- Session initialization ----------------
 def safe_init_session():
@@ -39,13 +39,15 @@ def safe_init_session():
 safe_init_session()
 
 # ---------------- Embedded logo config (for post-generation overlay) ----------------
+# Update LOGO_PATH to your embedded logo PNG (transparent recommended)
 LOGO_PATH = "Dr._Reddy's_Laboratories_logo.svg.png"
 
 def load_embedded_logo(path=LOGO_PATH):
     try:
         with open(path, "rb") as f:
             data = f.read()
-            Image.open(BytesIO(data)).convert("RGBA")  # validate
+            # validate with Pillow
+            Image.open(BytesIO(data)).convert("RGBA")
             return data
     except Exception:
         return None
@@ -54,6 +56,7 @@ EMBEDDED_LOGO_BYTES = load_embedded_logo()
 
 # ---------------- Prompt templates and style map ----------------
 PROMPT_TEMPLATES = {
+
     "None": """
 Dont make any changes in the user's prompt.Follow it as it is
 User’s raw prompt:
@@ -61,6 +64,7 @@ User’s raw prompt:
 
 Refined general image prompt:
 """,
+
     "General": """
 You are an expert AI prompt engineer specialized in creating vivid and descriptive image prompts.
 
@@ -82,9 +86,82 @@ User’s raw prompt:
 
 Refined general image prompt:
 """,
-    "Design": """You are a senior AI prompt engineer supporting a creative design team. ...""",
-    "Marketing": """You are a senior AI prompt engineer creating polished prompts for marketing and advertising visuals. ...""",
-    "DPEX": """You are a senior AI prompt engineer creating refined prompts for IT and technology-related visuals. ...""",
+
+    "Design": """
+You are a senior AI prompt engineer supporting a creative design team.
+
+Your job:
+- Expand raw input into a visually inspiring, design-oriented image prompt.
+- Add imaginative details about:
+  • Artistic styles (minimalist, abstract, futuristic, flat, 3D render, watercolor, digital illustration)
+  • Color schemes, palettes, textures, and patterns
+  • Composition and balance (symmetry, negative space, creative framing)
+  • Lighting and atmosphere (soft glow, vibrant contrast, surreal shading)
+  • Perspective (isometric, top-down, wide shot, close-up)
+
+Rules:
+- Keep fidelity to the idea but make it highly creative and visually unique.
+- Output only the final refined image prompt.
+
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined design image prompt:
+""",
+
+    "Marketing": """
+You are a senior AI prompt engineer creating polished prompts for marketing and advertising visuals.
+
+Task:
+- Take the user’s raw input and turn it into a polished, professional, campaign-ready image prompt.
+- Expand the idea with rich marketing-oriented details that make it visually persuasive.
+
+When refining, include:
+- Background & setting (modern, lifestyle, commercial, aspirational)
+- Lighting & atmosphere (studio lights, golden hour, cinematic)
+- Style (photorealistic, cinematic, product photography, lifestyle branding)
+- Perspective & composition (wide shot, close-up, dramatic angles)
+- Mood, tone & branding suitability (premium, sleek, aspirational)
+
+Special Brand Rule:
+- If the user asks for an image related to a specific brand, seamlessly add the brand’s tagline into the final image prompt.
+- For **Dr. Reddy’s**, the correct tagline is: “Good Health Can’t Wait.”
+
+Rules:
+- Stay faithful to the user’s idea but elevate it for use in ads, social media, or presentations.
+- Output **only** the final refined image prompt (no explanations, no extra text).
+
+User raw input:
+{USER_PROMPT}
+
+
+Refined marketing image prompt:
+""",
+
+    "DPEX": """
+You are a senior AI prompt engineer creating refined prompts for IT and technology-related visuals.
+
+Your job:
+- Transform the raw input into a detailed, professional, and technology-focused image prompt.
+- Expand with contextual details about:
+  • Technology environments (server rooms, data centers, cloud systems, coding workspaces)
+  • Digital elements (network diagrams, futuristic UIs, holograms, cybersecurity visuals)
+  • People in IT roles (developers, engineers, admins, tech support, collaboration)
+  • Tone (innovative, technical, futuristic, professional)
+  • Composition (screens, servers, code on monitors, abstract digital patterns)
+  • Lighting and effects (LED glow, cyberpunk tones, neon highlights, modern tech ambiance)
+
+Rules:
+- Ensure images are suitable for IT presentations, product demos, training, technical documentation, and digital transformation campaigns.
+- Stay true to the user’s intent but emphasize a technological and innovative look.
+- Output only the final refined image prompt.
+
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined DPEX image prompt:
+""",
+
     "HR": """
 You are a senior AI prompt engineer creating refined prompts for human resources and workplace-related visuals.
 
@@ -107,14 +184,50 @@ User’s raw prompt:
 
 Refined HR image prompt:
 """,
-    "Business": """You are a senior AI prompt engineer creating refined prompts for business and corporate visuals. ..."""
+
+    "Business": """
+You are a senior AI prompt engineer creating refined prompts for business and corporate visuals.
+
+Your job:
+- Transform the raw input into a detailed, professional, and business-oriented image prompt.
+- Expand with contextual details about:
+  • Corporate settings (boardrooms, skyscrapers, modern offices, networking events)
+  • Business activities (presentations, negotiations, brainstorming sessions, teamwork)
+  • People (executives, entrepreneurs, consultants, diverse teams, global collaboration)
+  • Tone (professional, ambitious, strategic, innovative)
+  • Composition (formal meetings, handshake deals, conference tables, city skyline backgrounds)
+  • Lighting and atmosphere (clean, modern, premium, professional)
+
+Rules:
+- Ensure images are suitable for corporate branding, investor decks, strategy sessions, or professional reports.
+- Stay true to the user’s intent but emphasize professionalism, ambition, and success.
+- Output only the final refined image prompt.
+
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined business image prompt:
+"""
 }
 
 STYLE_DESCRIPTIONS = {
     "None": "No special styling — keep the image natural, faithful to the user’s idea.",
-    "Smart": "A clean, balanced, and polished look. Professional yet neutral.",
-    "Cinematic": "Film-style composition with professional lighting.",
-    # ... keep the rest if you want ...
+    "Smart": "A clean, balanced, and polished look. Professional yet neutral, visually appealing without strong artistic bias.",
+    "Cinematic": "Film-style composition with professional lighting. Wide dynamic range, dramatic highlights, storytelling feel.",
+    "Creative": "Playful, imaginative, and experimental. Bold artistic choices, unexpected elements, and expressive color use.",
+    "Bokeh": "Photography style with shallow depth of field. Subject in sharp focus with soft, dreamy, blurred backgrounds.",
+    "Macro": "Extreme close-up photography. High detail, textures visible, shallow focus highlighting minute features.",
+    "Illustration": "Hand-drawn or digitally illustrated style. Clear outlines, stylized shading, expressive and artistic.",
+    "3D Render": "Photorealistic or stylized CGI. Crisp geometry, depth, shadows, and reflective surfaces with realistic rendering.",
+    "Fashion": "High-end editorial photography. Stylish, glamorous poses, bold makeup, controlled lighting, and modern aesthetic.",
+    "Minimalist": "Simple and uncluttered. Few elements, large negative space, flat or muted color palette, clean composition.",
+    "Moody": "Dark, atmospheric, and emotional. Strong shadows, high contrast, deep tones, cinematic ambiance.",
+    "Portrait": "Focus on the subject. Natural skin tones, shallow depth of field, close-up or waist-up framing, studio or natural lighting.",
+    "Stock Photo": "Professional, commercial-quality photo. Neutral subject matter, polished composition, business-friendly aesthetic.",
+    "Vibrant": "Bold, saturated colors. High contrast, energetic mood, eye-catching and lively presentation.",
+    "Pop Art": "Comic-book and pop-art inspired. Bold outlines, halftone patterns, flat vivid colors, high contrast, playful tone.",
+    "Vector": "Flat vector graphics. Smooth shapes, sharp edges, solid fills, and clean scalable style like logos or icons.",
+    # ... other styles omitted for brevity if you expand later ...
 }
 
 # ---------------- Helpers ----------------
@@ -126,6 +239,7 @@ def sanitize_prompt(text: str) -> str:
         ln = line.strip()
         if not ln:
             continue
+        # note: keep the same sanitizer rules but we will avoid writing style hints that begin with these
         if re.match(r'^(Option|Key|Apply|Specificity|Keywords)\b', ln, re.I):
             continue
         if re.match(r'^\d+[\.\)]\s*', ln):
@@ -283,8 +397,8 @@ def overlay_logo_on_image(image_bytes, logo_bytes, placement="bottom-right", sca
 def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
     """
     Returns (list_of_image_bytes, enhanced_prompt_str)
-    This function will attempt to refine prompt via text model when dept != None and then
-    call Imagen. We use style_desc to nudge the model (e.g., palette hints, background).
+    This function refines the prompt (when dept != None) using the text model, ensuring
+    style instructions (palette/white background) are present in the final enhanced prompt.
     """
     enhanced_prompt = prompt  # default
 
@@ -308,14 +422,49 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
             try:
                 template = PROMPT_TEMPLATES.get(dept, PROMPT_TEMPLATES["General"])
                 refinement_input = template.replace("{USER_PROMPT}", prompt)
+
+                # Use a label that sanitize_prompt won't strip and avoid blacklisted prefixes
                 if style_desc:
-                    refinement_input += f"\n\nApply style: {style_desc}"
-                # generate refined prompt (text model)
+                    refinement_input += f"\n\nStyle instructions: {style_desc}"
+
+                # Show the exact refinement input we send to the text model (helps debugging)
+                try:
+                    with st.expander("Refinement input (sent to text model)", expanded=False):
+                        st.code(refinement_input)
+                except Exception:
+                    pass
+
+                # Call the text model to refine the prompt
                 text_resp = text_model.generate_content(refinement_input)
                 maybe = safe_get_enhanced_text(text_resp).strip()
                 cleaned = sanitize_prompt(maybe)
-                if cleaned:
-                    enhanced_prompt = cleaned
+
+                # Choose candidate: prefer cleaned, else maybe, else original prompt
+                enhanced_candidate = cleaned if cleaned else (maybe if maybe else prompt)
+
+                # Guarantee style_desc appears in final enhanced prompt:
+                if style_desc and style_desc.strip():
+                    # If any of the explicit hex codes (or core palette words) are missing, append style_desc.
+                    # Extract hex codes from style_desc
+                    hex_list = re.findall(r'#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})', style_desc)
+                    style_present = False
+                    # Check if any hex appears in candidate (case-insensitive)
+                    for hx in hex_list:
+                        if hx.lower() in enhanced_candidate.lower():
+                            style_present = True
+                            break
+                    # Also check for some direct phrases like "white background" explicitly
+                    if not style_present:
+                        if "white background" in style_desc.lower() and "white background" in enhanced_candidate.lower():
+                            style_present = True
+
+                    if not style_present:
+                        # append the style hint to ensure it's present
+                        enhanced_candidate = (enhanced_candidate + " " + style_desc).strip()
+
+                # Final enhanced prompt (sanitize again to clean any odd lines)
+                enhanced_prompt = sanitize_prompt(enhanced_candidate) or enhanced_candidate
+
             except Exception as e:
                 st.warning(f"Prompt refinement failed, using raw prompt. ({e})")
                 enhanced_prompt = prompt
@@ -326,7 +475,6 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
         return [], enhanced_prompt
 
     try:
-        # call Imagen with the (possibly refined) prompt
         resp = imagen.generate_images(prompt=enhanced_prompt, number_of_images=n_images)
     except Exception as e:
         st.error(f"Imagen generate_images failed: {e}")
@@ -341,7 +489,10 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
     return out, enhanced_prompt
 
 def run_edit_flow(edit_prompt, base_bytes):
-    """Use Nano Banana (Gemini image gen) to apply edits to base_bytes."""
+    """
+    Use Nano Banana (Gemini image gen) to apply edits to base_bytes.
+    Returns edited bytes or None.
+    """
     if not VERTEX_AVAILABLE:
         st.warning("VertexAI SDK not available — editing disabled.")
         return None
@@ -390,6 +541,7 @@ Instructions:
 left_col, right_col = st.columns([3,1])
 
 with left_col:
+
     # Controls
     dept = st.selectbox("🏢 Department ", list(PROMPT_TEMPLATES.keys()), index=0)
     style = st.selectbox("🎨 Style ", list(STYLE_DESCRIPTIONS.keys()), index=0)
@@ -427,13 +579,13 @@ with left_col:
     if dept == "HR" and hr_palette_hex:
         # append palette hint to style_desc so text-refiner can include it
         style_desc = (style_desc + " ").strip() + " Use only these colors: " + ", ".join(hr_palette_hex) + "."
-        # optional: request poster-style or photorealistic depending on tone
+        # tone guidance
         if hr_palette_choice == "serious":
             style_desc += " Tone: formal and professional, minimal playful elements."
         else:
             style_desc += " Tone: friendly and approachable, warm atmosphere."
 
-    # Editor upload
+    # Editor upload (existing behavior)
     uploaded_file = st.file_uploader("Upload an image to edit ", type=["png","jpg","jpeg","webp"])
     if uploaded_file:
         raw = uploaded_file.read()
@@ -441,6 +593,7 @@ with left_col:
         buf = BytesIO()
         pil.save(buf, format="PNG")
         buf_bytes = buf.getvalue()
+        # immediately load uploaded image into editor
         st.session_state["edit_image_bytes"] = buf_bytes
         st.session_state["edit_image_name"] = getattr(uploaded_file, "name", f"uploaded_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         st.session_state["edit_iterations"] = 0
@@ -454,7 +607,7 @@ with left_col:
     # Logo Mode controls (post-generation overlay)
     logo_mode = st.checkbox("Add embedded logo after generation", value=False)
     if logo_mode and not EMBEDDED_LOGO_BYTES:
-        st.error(f"Embedded logo not found at LOGO_PATH ('{LOGO_PATH}'). Update LOGO_PATH or add the file.")
+        st.error("Embedded logo not found at LOGO_PATH. Please update LOGO_PATH or put the logo file there.")
         logo_mode = False
 
     placement_hint = "bottom-right"
@@ -469,6 +622,7 @@ with left_col:
 
     num_images = 1
 
+    # Run button: either Edit (if edit image loaded) or Generate
     if st.button("Run"):
         prompt_text = (prompt or "").strip()
         if not prompt_text:
@@ -476,7 +630,7 @@ with left_col:
         else:
             base_image = st.session_state.get("edit_image_bytes")
             if base_image:
-                # EDIT flow using Nano Banana
+                # EDIT flow: edit the loaded image and make result the new loaded image
                 with st.spinner("Editing image..."):
                     edited = run_edit_flow(prompt_text, base_image)
                     if edited:
@@ -507,10 +661,12 @@ with left_col:
                                 st.session_state["edit_image_name"] = current_name
                                 st.session_state["edit_iterations"] = 0
                                 st.experimental_rerun()
-
+                        
+                        # Replace the editor image with the freshly edited bytes so user can re-edit
                         st.session_state["edit_image_bytes"] = edited
                         st.session_state["edit_image_name"] = current_name
 
+                        # increment iteration counter and append to edited history chain
                         st.session_state["edit_iterations"] = st.session_state.get("edit_iterations", 0) + 1
                         st.session_state.edited_images.append({
                             "original": base_image,
@@ -520,17 +676,22 @@ with left_col:
                             "ts": ts
                         })
 
+                        # optional guard
                         if st.session_state["edit_iterations"] >= st.session_state.get("max_edit_iterations", 20):
                             st.warning(f"Reached {st.session_state['edit_iterations']} edits. Please finalize or reset to avoid runaway costs.")
                     else:
                         st.error("Editing failed or returned no image.")
             else:
-                # GENERATION flow (Imagen) — prompt-only palette + white background approach
+                # GENERATION flow (Imagen)
                 with st.spinner("Generating images..."):
-                    # We pass style_desc (which may contain palette/background hints) into the refinement step
                     generated, enhanced = generate_images_from_prompt(prompt_text, dept=dept, style_desc=style_desc, n_images=num_images)
                     if generated:
                         st.success(f"Generated {len(generated)} image(s).")
+
+                        # Show the final enhanced prompt prominently for review (helps confirm palette/bg instructions)
+                        with st.expander("Final enhanced prompt (sent to Imagen)", expanded=True):
+                            st.code(enhanced)
+
                         for i, b in enumerate(generated):
                             out_bytes = b
                             # Post-generation: overlay embedded logo if requested
@@ -539,7 +700,6 @@ with left_col:
                                     out_bytes = overlay_logo_on_image(out_bytes, EMBEDDED_LOGO_BYTES, placement=placement_hint, scale=scale_frac, opacity=opacity)
                                 except Exception as e:
                                     st.warning(f"Logo overlay failed, saving original generated image. ({e})")
-                                    out_bytes = b
 
                             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                             fname = f"outputs/generated/gen_{ts}_{i}.png"
@@ -553,6 +713,9 @@ with left_col:
                             st.session_state.generated_images.append(entry)
                     else:
                         st.error("Generation failed or returned no images.")
+
+    # Option to clear editor (go back to generate-mode)
+    
 
     st.markdown("---")
 
@@ -575,6 +738,7 @@ with left_col:
 
             col_dl, col_edit = st.columns([1,1])
             with col_dl:
+                # stable download key per image
                 st.download_button(
                     "⬇️ Download",
                     data=b,
@@ -583,6 +747,7 @@ with left_col:
                     key=f"dl_gen_{key_hash}"
                 )
             with col_edit:
+                # stable edit button - loads the image into the editor so it becomes re-editable
                 if st.button("✏️ Edit ", key=f"edit_gen_{key_hash}"):
                     st.session_state["edit_image_bytes"] = b
                     st.session_state["edit_image_name"] = os.path.basename(fname)
@@ -600,6 +765,7 @@ with left_col:
             edited_bytes = entry.get("edited")
             prompt_prev = entry.get("prompt", "")
             ts = entry.get("ts", "")
+            # uniqueish key for widgets in this loop
             hash_k = hashlib.sha1((name + ts + str(idx)).encode()).hexdigest()[:12]
 
             with st.expander(f"{name} — {prompt_prev[:80]}"):
@@ -610,6 +776,7 @@ with left_col:
                 with col2:
                     show_image_safe(edited_bytes, caption="After")
 
+                # download and continue-edit buttons side-by-side
                 col_dl, col_edit = st.columns([1,1])
                 with col_dl:
                     st.download_button("⬇️ Download Edited", data=edited_bytes, file_name=name, mime="image/png", key=f"hist_dl_{hash_k}")
@@ -622,6 +789,7 @@ with left_col:
 
 # ---------------- Right column: smaller history + controls ----------------
 with right_col:
+   
     max_it = 100
     st.session_state["max_edit_iterations"] = int(max_it)
 
@@ -630,3 +798,4 @@ with right_col:
         show_image_safe(EMBEDDED_LOGO_BYTES, caption="Embedded logo (post-generation)")
     else:
         st.warning(f"No embedded logo found at '{LOGO_PATH}'. Update LOGO_PATH at top of file.")
+
