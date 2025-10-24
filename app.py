@@ -1,0 +1,666 @@
+# app.py
+import os
+import re
+import uuid
+import datetime
+import hashlib
+from io import BytesIO
+
+import streamlit as st
+from PIL import Image
+
+try:
+    import vertexai
+    from vertexai.preview.vision_models import ImageGenerationModel
+    from vertexai.generative_models import GenerativeModel, Part
+    from google.oauth2 import service_account
+    VERTEX_AVAILABLE = True
+except Exception:
+    VERTEX_AVAILABLE = False
+
+# ---------------- Page config ----------------
+st.set_page_config(page_title="AI Image Generator + Editor", layout="wide")
+st.title("AI Image Generator + Editor")
+
+# ---------------- Session initialization ----------------
+def safe_init_session():
+    try:
+        _ = st.session_state
+    except RuntimeError:
+        return False
+    st.session_state.setdefault("generated_images", [])   # list of {"filename","content","key","enhanced_prompt"}
+    st.session_state.setdefault("edited_images", [])      # list of {"original","edited","prompt","filename","ts"}
+    st.session_state.setdefault("edit_image_bytes", None) # bytes of the image currently loaded in the left editor
+    st.session_state.setdefault("edit_image_name", "")
+    st.session_state.setdefault("edit_iterations", 0)
+    st.session_state.setdefault("max_edit_iterations", 20) # configurable cap
+    return True
+
+safe_init_session()
+
+# ---------------- Embedded logo config (for post-generation overlay) ----------------
+# Update this path to point to your embedded logo file (PNG recommended with transparency)
+LOGO_PATH = "Dr._Reddy's_Laboratories_logo.svg.png"
+
+def load_embedded_logo(path=LOGO_PATH):
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+            Image.open(BytesIO(data)).convert("RGBA")  # validate
+            return data
+    except Exception:
+        return None
+
+EMBEDDED_LOGO_BYTES = load_embedded_logo()
+
+# ---------------- Prompt templates and style map ----------------
+PROMPT_TEMPLATES = {
+    "None": """
+Dont make any changes in the user's prompt.Follow it as it is
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined general image prompt:
+""",
+    "General": """
+You are an expert AI prompt engineer specialized in creating vivid and descriptive image prompts.
+
+Your job:
+- Expand the user’s input into a detailed, clear prompt for an image generation model.
+- Add missing details such as:
+  • Background and setting
+  • Lighting and mood
+  • Style and realism level
+  • Perspective and composition
+
+Rules:
+- Stay true to the user’s intent.
+- Keep language concise, descriptive, and expressive.
+- Output only the final refined image prompt.
+
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined general image prompt:
+""",
+    "Design": """
+... (same as before)
+""",
+    "Marketing": """
+... (same as before; keeps Dr. Reddy's tagline rule)
+""",
+    "DPEX": """
+... (same as before)
+""",
+    "HR": """
+You are a senior AI prompt engineer creating refined prompts for human resources and workplace-related visuals.
+
+Your job:
+- Transform the raw input into a detailed, professional, and HR-focused image prompt.
+- Expand with contextual details about:
+  • Workplace settings (modern office, meeting rooms, open workspaces, onboarding sessions)
+  • People interactions (interviews, teamwork, training, collaboration, diversity and inclusion)
+  • Themes (employee engagement, professional growth, recruitment, performance evaluation)
+  • Composition (groups in discussion, managers mentoring, collaborative workshops)
+  • Lighting and tone (bright, welcoming, professional, inclusive)
+
+Rules:
+- Ensure images are suitable for HR presentations, recruitment campaigns, internal training, or employee engagement material.
+- Stay true to the user’s intent but emphasize people, culture, and workplace positivity.
+- Output only the final refined image prompt.
+
+User’s raw prompt:
+"{USER_PROMPT}"
+
+Refined HR image prompt:
+""",
+    "Business": """
+... (same as before)
+"""
+}
+
+STYLE_DESCRIPTIONS = {
+    "None": "No special styling — keep the image natural, faithful to the user’s idea.",
+    "Smart": "A clean, balanced, and polished look. Professional yet neutral, visually appealing without strong artistic bias.",
+    "Cinematic": "Film-style composition with professional lighting. Wide dynamic range, dramatic highlights, storytelling feel.",
+    # ... you can keep remaining styles as in your original file ...
+}
+
+# ---------------- Helpers ----------------
+def sanitize_prompt(text: str) -> str:
+    if not text:
+        return text
+    lines = []
+    for line in text.splitlines():
+        ln = line.strip()
+        if not ln:
+            continue
+        if re.match(r'^(Option|Key|Apply|Specificity|Keywords)\b', ln, re.I):
+            continue
+        if re.match(r'^\d+[\.\)]\s*', ln):
+            continue
+        if len(ln) < 80 and ln.endswith(':'):
+            continue
+        if ln.startswith('-') or ln.startswith('*'):
+            continue
+        lines.append(ln)
+    cleaned = ' '.join(lines)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned or text
+
+def safe_get_enhanced_text(resp):
+    if resp is None:
+        return ""
+    if hasattr(resp, "text") and resp.text:
+        return resp.text
+    if hasattr(resp, "candidates") and resp.candidates:
+        try:
+            return resp.candidates[0].content.parts[0].text
+        except Exception:
+            pass
+    return str(resp)
+
+def get_image_bytes_from_genobj(gen_obj):
+    if isinstance(gen_obj, (bytes, bytearray)):
+        return bytes(gen_obj)
+    for attr in ("image_bytes", "_image_bytes"):
+        if hasattr(gen_obj, attr):
+            return getattr(gen_obj, attr)
+    if hasattr(gen_obj, "image") and gen_obj.image:
+        for attr in ("image_bytes", "_image_bytes"):
+            if hasattr(gen_obj.image, attr):
+                return getattr(gen_obj.image, attr)
+    return None
+
+def show_image_safe(image_source, caption="Image"):
+    try:
+        if isinstance(image_source, (bytes, bytearray)):
+            st.image(image_source, caption=caption, use_container_width=True)
+        elif isinstance(image_source, Image.Image):
+            st.image(image_source, caption=caption, use_container_width=True)
+        else:
+            st.image(Image.open(BytesIO(image_source)), caption=caption, use_container_width=True)
+    except TypeError:
+        if isinstance(image_source, (bytes, bytearray)):
+            st.image(image_source, caption=caption, use_column_width=True)
+        else:
+            st.image(Image.open(BytesIO(image_source)), caption=caption, use_column_width=True)
+    except Exception as e:
+        st.error(f"Failed to display image: {e}")
+
+# ---------------- Vertex lazy loaders ----------------
+MODEL_CACHE = {"imagen": None, "nano": None, "text": None}
+
+def init_vertex(project_id, credentials_info, location="us-central1"):
+    if not VERTEX_AVAILABLE:
+        return False
+    try:
+        if getattr(vertexai, "_initialized", False):
+            return True
+    except Exception:
+        pass
+    try:
+        creds = service_account.Credentials.from_service_account_info(dict(credentials_info))
+        vertexai.init(project=project_id, location=location, credentials=creds)
+        setattr(vertexai, "_initialized", True)
+        return True
+    except Exception as e:
+        st.error(f"Vertex init failed: {e}")
+        return False
+
+def get_imagen_model():
+    if MODEL_CACHE["imagen"]:
+        return MODEL_CACHE["imagen"]
+    if not VERTEX_AVAILABLE:
+        return None
+    try:
+        MODEL_CACHE["imagen"] = ImageGenerationModel.from_pretrained("imagen-4.0-generate-001")
+        return MODEL_CACHE["imagen"]
+    except Exception as e:
+        st.error(f"Failed to load Imagen model: {e}")
+        return None
+
+def get_nano_banana_model():
+    if MODEL_CACHE["nano"]:
+        return MODEL_CACHE["nano"]
+    if not VERTEX_AVAILABLE:
+        return None
+    try:
+        MODEL_CACHE["nano"] = GenerativeModel("gemini-2.5-flash-image")
+        return MODEL_CACHE["nano"]
+    except Exception as e:
+        st.error(f"Failed to load Nano Banana model: {e}")
+        return None
+
+def get_text_model():
+    if MODEL_CACHE["text"]:
+        return MODEL_CACHE["text"]
+    if not VERTEX_AVAILABLE:
+        return None
+    try:
+        MODEL_CACHE["text"] = GenerativeModel("gemini-2.0-flash")
+        return MODEL_CACHE["text"]
+    except Exception as e:
+        st.error(f"Failed to load text model: {e}")
+        return None
+
+# ---------------- Logo overlay helper (post-generation) ----------------
+def overlay_logo_on_image(image_bytes, logo_bytes, placement="bottom-right", scale=0.08, opacity=1.0):
+    """Overlay embedded logo deterministically and return PNG bytes."""
+    try:
+        base = Image.open(BytesIO(image_bytes)).convert("RGBA")
+        logo = Image.open(BytesIO(logo_bytes)).convert("RGBA")
+    except Exception as e:
+        st.warning(f"Failed to open base/logo images for overlay: {e}")
+        return image_bytes
+
+    base_w, base_h = base.size
+    new_logo_w = max(1, int(base_w * float(scale)))
+    w_percent = new_logo_w / logo.width
+    new_logo_h = int(logo.height * w_percent)
+    logo = logo.resize((new_logo_w, new_logo_h), Image.LANCZOS)
+
+    if opacity < 1.0:
+        alpha = logo.split()[3].point(lambda p: int(p * opacity))
+        logo.putalpha(alpha)
+
+    margin = int(base_w * 0.02)
+    ph = (placement or "").strip().lower()
+    if "bottom" in ph:
+        y = base_h - new_logo_h - margin
+    elif "top" in ph:
+        y = margin
+    else:
+        y = (base_h - new_logo_h) // 2
+
+    if "right" in ph:
+        x = base_w - new_logo_w - margin
+    elif "left" in ph:
+        x = margin
+    else:
+        x = (base_w - new_logo_w) // 2
+
+    # clamp coords to keep logo inside canvas
+    x = max(0, min(x, base_w - new_logo_w))
+    y = max(0, min(y, base_h - new_logo_h))
+
+    base.paste(logo, (x, y), logo)
+    out = BytesIO()
+    base.save(out, format="PNG")
+    return out.getvalue()
+
+# ---------------- Palette helpers (for HR department) ----------------
+def hex_to_rgb(hexstr):
+    h = hexstr.lstrip('#')
+    if len(h) == 3:
+        h = ''.join([c*2 for c in h])
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+def build_palette_image(hex_list):
+    rgbs = [hex_to_rgb(h) for h in hex_list]
+    flat = []
+    for (r, g, b) in rgbs:
+        flat.extend([r, g, b])
+    needed = 256 * 3 - len(flat)
+    if needed > 0:
+        flat.extend([0] * needed)
+    pal = Image.new('P', (16, 16))
+    pal.putpalette(flat)
+    return pal
+
+def apply_palette_to_bytes(image_bytes, hex_palette, dither=False):
+    try:
+        im = Image.open(BytesIO(image_bytes)).convert('RGB')
+    except Exception as e:
+        st.warning(f"apply_palette_to_bytes: failed to open image: {e}")
+        return image_bytes
+    pal_img = build_palette_image(hex_palette)
+    dither_flag = Image.FLOYDSTEINBERG if dither else 0
+    try:
+        q = im.quantize(palette=pal_img, dither=dither_flag)
+        out = q.convert('RGBA')
+        buf = BytesIO()
+        out.save(buf, format='PNG')
+        return buf.getvalue()
+    except Exception as e:
+        st.warning(f"apply_palette_to_bytes: quantize failed: {e}")
+        return image_bytes
+
+# ---------------- Core flows ----------------
+def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
+    enhanced_prompt = prompt  # default
+
+    if not VERTEX_AVAILABLE:
+        st.warning("VertexAI SDK not available — generation disabled in this environment.")
+        return [], enhanced_prompt
+
+    creds = st.secrets.get("gcp_service_account")
+    if not creds or not creds.get("project_id"):
+        st.warning("Missing GCP credentials in Streamlit secrets: 'gcp_service_account'. Generation disabled.")
+        return [], enhanced_prompt
+
+    if not init_vertex(creds["project_id"], creds):
+        st.warning("Failed to initialize VertexAI.")
+        return [], enhanced_prompt
+
+    if dept and dept != "None":
+        text_model = get_text_model()
+        if text_model:
+            try:
+                template = PROMPT_TEMPLATES.get(dept, PROMPT_TEMPLATES["General"])
+                refinement_input = template.replace("{USER_PROMPT}", prompt)
+                if style_desc:
+                    refinement_input += f"\n\nApply style: {style_desc}"
+                text_resp = text_model.generate_content(refinement_input)
+                maybe = safe_get_enhanced_text(text_resp).strip()
+                cleaned = sanitize_prompt(maybe)
+                if cleaned:
+                    enhanced_prompt = cleaned
+            except Exception as e:
+                st.warning(f"Prompt refinement failed, using raw prompt. ({e})")
+                enhanced_prompt = prompt
+
+    imagen = get_imagen_model()
+    if imagen is None:
+        st.warning("Imagen model unavailable.")
+        return [], enhanced_prompt
+
+    try:
+        resp = imagen.generate_images(prompt=enhanced_prompt, number_of_images=n_images)
+    except Exception as e:
+        st.error(f"Imagen generate_images failed: {e}")
+        return [], enhanced_prompt
+
+    out = []
+    for i in range(min(n_images, len(resp.images))):
+        gen_obj = resp.images[i]
+        b = get_image_bytes_from_genobj(gen_obj)
+        if b:
+            out.append(b)
+    return out, enhanced_prompt
+
+def run_edit_flow(edit_prompt, base_bytes):
+    if not VERTEX_AVAILABLE:
+        st.warning("VertexAI SDK not available — editing disabled.")
+        return None
+
+    creds = st.secrets.get("gcp_service_account")
+    if not creds or not creds.get("project_id"):
+        st.warning("Missing GCP credentials in Streamlit secrets: 'gcp_service_account'. Editing disabled.")
+        return None
+
+    if not init_vertex(creds["project_id"], creds):
+        st.warning("Failed to initialize VertexAI.")
+        return None
+
+    nano = get_nano_banana_model()
+    if nano is None:
+        st.warning("Nano Banana editor model unavailable.")
+        return None
+
+    input_image = Part.from_data(mime_type="image/png", data=base_bytes)
+    edit_instruction = f"""
+You are a professional AI image editor.
+Instructions:
+- Take the provided image.
+- Apply these edits: {edit_prompt}
+- Return the final edited image inline (PNG).
+- Do not include any extra text or captions.
+"""
+    try:
+        response = nano.generate_content([edit_instruction, input_image])
+    except Exception as e:
+        st.error(f"Nano Banana call failed: {e}")
+        return None
+
+    for candidate in getattr(response, "candidates", []):
+        for part in getattr(candidate.content, "parts", []):
+            if hasattr(part, "inline_data") and getattr(part.inline_data, "data", None):
+                return part.inline_data.data
+
+    if hasattr(response, "text") and response.text:
+        st.warning("Editor returned text instead of an image. Check response.")
+    else:
+        st.warning("Editor returned no inline image.")
+    return None
+
+# ---------------- UI ----------------
+left_col, right_col = st.columns([3,1])
+
+with left_col:
+
+    # Controls
+    dept = st.selectbox("🏢 Department ", list(PROMPT_TEMPLATES.keys()), index=0)
+    style = st.selectbox("🎨 Style ", list(STYLE_DESCRIPTIONS.keys()), index=0)
+    style_desc = "" if style == "None" else STYLE_DESCRIPTIONS.get(style, "")
+
+    # HR-specific palette UI
+    hr_palette_choice = None
+    hr_palette_hex = None
+    if dept == "HR":
+        hr_palette_choice = st.radio("HR tone", ("serious", "friendly"), index=0)
+        if hr_palette_choice == "serious":
+            hr_palette_hex = [
+                "#00C7FF",
+                "#00EF9F",
+                "#FFD100",
+                "#FFC788",
+                "#FF5046",
+            ]
+        else:  # friendly
+            hr_palette_hex = [
+                "#00E9FF",
+                "#CEF600",
+                "#FFF000",   # corrected to valid 6-digit hex
+                "#FF7327",
+                "#FF5894",
+            ]
+        st.caption(f"HR palette: {', '.join(hr_palette_hex)}")
+        # also nudge style_desc so prompt refinement knows about palette
+        style_desc += " Use only the following color palette: " + ", ".join(hr_palette_hex) + "."
+
+    # Editor upload
+    uploaded_file = st.file_uploader("Upload an image to edit ", type=["png","jpg","jpeg","webp"])
+    if uploaded_file:
+        raw = uploaded_file.read()
+        pil = Image.open(BytesIO(raw)).convert("RGB")
+        buf = BytesIO()
+        pil.save(buf, format="PNG")
+        buf_bytes = buf.getvalue()
+        st.session_state["edit_image_bytes"] = buf_bytes
+        st.session_state["edit_image_name"] = getattr(uploaded_file, "name", f"uploaded_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+        st.session_state["edit_iterations"] = 0
+        show_image_safe(buf_bytes, caption=f"Uploaded: {st.session_state['edit_image_name']}")
+    else:
+        if st.session_state.get("edit_image_bytes"):
+            show_image_safe(st.session_state["edit_image_bytes"], caption=f"Editor loaded: {st.session_state.get('edit_image_name','Selected Image')}")
+
+    prompt = st.text_area("Enter prompt", key="main_prompt", height=140, placeholder="")
+
+    # Logo Mode controls (post-generation overlay)
+    logo_mode = st.checkbox("Add embedded logo after generation", value=False)
+    if logo_mode and not EMBEDDED_LOGO_BYTES:
+        st.error(f"Embedded logo not found at LOGO_PATH ('{LOGO_PATH}'). Update LOGO_PATH or add the file.")
+        logo_mode = False
+
+    placement_hint = "bottom-right"
+    scale_frac = 0.08
+    opacity = 1.0
+    if logo_mode:
+        st.markdown("**Logo overlay settings (post-generation)**")
+        placement_hint = st.text_input("Placement (top-left, top-right, bottom-left, bottom-right, center)", value="bottom-right")
+        scale_percent = st.slider("Logo size (% of image width)", min_value=2, max_value=20, value=8)
+        opacity = st.slider("Logo opacity", min_value=0.0, max_value=1.0, value=1.0, step=0.05)
+        scale_frac = scale_percent / 100.0
+
+    num_images = 1
+
+    if st.button("Run"):
+        prompt_text = (prompt or "").strip()
+        if not prompt_text:
+            st.warning("Please enter a prompt before running.")
+        else:
+            base_image = st.session_state.get("edit_image_bytes")
+            if base_image:
+                # EDIT flow using Nano Banana
+                with st.spinner("Editing image..."):
+                    edited = run_edit_flow(prompt_text, base_image)
+                    if edited:
+                        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        out_fn = f"outputs/edited/edited_{ts}_{uuid.uuid4().hex[:6]}.png"
+                        os.makedirs(os.path.dirname(out_fn), exist_ok=True)
+                        with open(out_fn, "wb") as f:
+                            f.write(edited)
+
+                        st.success("Edited image created.")
+                        show_image_safe(edited, caption=f"Edited ({ts})")
+
+                        current_name = os.path.basename(out_fn)
+                        safe_key = hashlib.sha1(current_name.encode()).hexdigest()[:12]
+
+                        col_dl, col_edit, col_clear = st.columns([1,1,1])
+                        with col_dl:
+                            st.download_button(
+                                "⬇️ Download Edited (current)",
+                                data=edited,
+                                file_name=current_name,
+                                mime="image/png",
+                                key=f"dl_edit_{safe_key}"
+                            )
+                        with col_edit:
+                            if st.button("✏️ Edit this image ", key=f"edit_current_{safe_key}"):
+                                st.session_state["edit_image_bytes"] = edited
+                                st.session_state["edit_image_name"] = current_name
+                                st.session_state["edit_iterations"] = 0
+                                st.experimental_rerun()
+
+                        st.session_state["edit_image_bytes"] = edited
+                        st.session_state["edit_image_name"] = current_name
+
+                        st.session_state["edit_iterations"] = st.session_state.get("edit_iterations", 0) + 1
+                        st.session_state.edited_images.append({
+                            "original": base_image,
+                            "edited": edited,
+                            "prompt": prompt_text,
+                            "filename": out_fn,
+                            "ts": ts
+                        })
+
+                        if st.session_state["edit_iterations"] >= st.session_state.get("max_edit_iterations", 20):
+                            st.warning(f"Reached {st.session_state['edit_iterations']} edits. Please finalize or reset to avoid runaway costs.")
+                    else:
+                        st.error("Editing failed or returned no image.")
+            else:
+                # GENERATION flow (Imagen)
+                with st.spinner("Generating images..."):
+                    generated, enhanced = generate_images_from_prompt(prompt_text, dept=dept, style_desc=style_desc, n_images=num_images)
+                    if generated:
+                        st.success(f"Generated {len(generated)} image(s).")
+                        for i, b in enumerate(generated):
+                            out_bytes = b
+                            # Post-generation: overlay embedded logo if requested
+                            if logo_mode and EMBEDDED_LOGO_BYTES:
+                                try:
+                                    out_bytes = overlay_logo_on_image(out_bytes, EMBEDDED_LOGO_BYTES, placement=placement_hint, scale=scale_frac, opacity=opacity)
+                                except Exception as e:
+                                    st.warning(f"Logo overlay failed, saving original generated image. ({e})")
+                                    out_bytes = b
+
+                            # If HR department selected and palette chosen, enforce palette
+                            if dept == "HR" and hr_palette_hex:
+                                try:
+                                    # use dither=False for exact palette; set True for smoother look
+                                    out_bytes = apply_palette_to_bytes(out_bytes, hr_palette_hex, dither=False)
+                                except Exception as e:
+                                    st.warning(f"Palette enforcement failed, using original image: {e}")
+
+                            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            fname = f"outputs/generated/gen_{ts}_{i}.png"
+                            os.makedirs(os.path.dirname(fname), exist_ok=True)
+                            with open(fname, "wb") as f:
+                                f.write(out_bytes)
+
+                            short = os.path.basename(fname) + str(i)
+                            key_hash = uuid.uuid5(uuid.NAMESPACE_DNS, short).hex[:8]
+                            entry = {"filename": fname, "content": out_bytes, "key": key_hash, "enhanced_prompt": enhanced}
+                            st.session_state.generated_images.append(entry)
+                    else:
+                        st.error("Generation failed or returned no images.")
+
+    st.markdown("---")
+
+    # -------------------------
+    # Render Recently Generated (persistent, outside Run block)
+    # -------------------------
+    if st.session_state.get("generated_images"):
+        st.markdown("### Recently Generated")
+        for entry in reversed(st.session_state.generated_images[-12:]):
+            fname = entry.get("filename")
+            b = entry.get("content")
+            key_hash = entry.get("key") or uuid.uuid5(uuid.NAMESPACE_DNS, os.path.basename(fname)).hex[:8]
+            enhanced_prompt = entry.get("enhanced_prompt", "")
+
+            show_image_safe(b, caption=os.path.basename(fname))
+
+            if enhanced_prompt:
+                with st.expander("Enhanced prompt (refined)"):
+                    st.code(enhanced_prompt)
+
+            col_dl, col_edit = st.columns([1,1])
+            with col_dl:
+                st.download_button(
+                    "⬇️ Download",
+                    data=b,
+                    file_name=os.path.basename(fname),
+                    mime="image/png",
+                    key=f"dl_gen_{key_hash}"
+                )
+            with col_edit:
+                if st.button("✏️ Edit ", key=f"edit_gen_{key_hash}"):
+                    st.session_state["edit_image_bytes"] = b
+                    st.session_state["edit_image_name"] = os.path.basename(fname)
+                    st.session_state["edit_iterations"] = 0
+                    st.experimental_rerun()
+
+    # -------------------------
+    # Render Edited History (allow picking any previous edited version to continue)
+    # -------------------------
+    if st.session_state.get("edited_images"):
+        st.markdown("### Edited History (chain)")
+        for idx, entry in enumerate(reversed(st.session_state.edited_images[-40:])):
+            name = os.path.basename(entry.get("filename", f"edited_{idx}.png"))
+            orig = entry.get("original")
+            edited_bytes = entry.get("edited")
+            prompt_prev = entry.get("prompt", "")
+            ts = entry.get("ts", "")
+            hash_k = hashlib.sha1((name + ts + str(idx)).encode()).hexdigest()[:12]
+
+            with st.expander(f"{name} — {prompt_prev[:80]}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    if orig:
+                        show_image_safe(orig, caption="Before")
+                with col2:
+                    show_image_safe(edited_bytes, caption="After")
+
+                col_dl, col_edit = st.columns([1,1])
+                with col_dl:
+                    st.download_button("⬇️ Download Edited", data=edited_bytes, file_name=name, mime="image/png", key=f"hist_dl_{hash_k}")
+                with col_edit:
+                    if st.button("✏️ Edit this version", key=f"hist_edit_{hash_k}"):
+                        st.session_state["edit_image_bytes"] = edited_bytes
+                        st.session_state["edit_image_name"] = name
+                        st.session_state["edit_iterations"] = 0
+                        st.experimental_rerun()
+
+# ---------------- Right column: smaller history + controls ----------------
+with right_col:
+
+    max_it = 100
+    st.session_state["max_edit_iterations"] = int(max_it)
+
+    st.markdown("**Embedded logo status**")
+    if EMBEDDED_LOGO_BYTES:
+        show_image_safe(EMBEDDED_LOGO_BYTES, caption="Embedded logo (post-generation)")
+    else:
+        st.warning(f"No embedded logo found at '{LOGO_PATH}'. Update LOGO_PATH at top of file.")
