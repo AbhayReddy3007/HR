@@ -20,7 +20,7 @@ except Exception:
 
 # ---------------- Page config ----------------
 st.set_page_config(page_title="AI Image Generator + Editor", layout="wide")
-st.title("AI Image Generator + Editor")
+st.title("AI Image Generator + Editor (Prompt-only palettes)")
 
 # ---------------- Session initialization ----------------
 def safe_init_session():
@@ -39,7 +39,6 @@ def safe_init_session():
 safe_init_session()
 
 # ---------------- Embedded logo config (for post-generation overlay) ----------------
-# Update this path to point to your embedded logo file (PNG recommended with transparency)
 LOGO_PATH = "Dr._Reddy's_Laboratories_logo.svg.png"
 
 def load_embedded_logo(path=LOGO_PATH):
@@ -83,15 +82,9 @@ User’s raw prompt:
 
 Refined general image prompt:
 """,
-    "Design": """
-... (same as before)
-""",
-    "Marketing": """
-... (same as before; keeps Dr. Reddy's tagline rule)
-""",
-    "DPEX": """
-... (same as before)
-""",
+    "Design": """You are a senior AI prompt engineer supporting a creative design team. ...""",
+    "Marketing": """You are a senior AI prompt engineer creating polished prompts for marketing and advertising visuals. ...""",
+    "DPEX": """You are a senior AI prompt engineer creating refined prompts for IT and technology-related visuals. ...""",
     "HR": """
 You are a senior AI prompt engineer creating refined prompts for human resources and workplace-related visuals.
 
@@ -114,16 +107,14 @@ User’s raw prompt:
 
 Refined HR image prompt:
 """,
-    "Business": """
-... (same as before)
-"""
+    "Business": """You are a senior AI prompt engineer creating refined prompts for business and corporate visuals. ..."""
 }
 
 STYLE_DESCRIPTIONS = {
     "None": "No special styling — keep the image natural, faithful to the user’s idea.",
-    "Smart": "A clean, balanced, and polished look. Professional yet neutral, visually appealing without strong artistic bias.",
-    "Cinematic": "Film-style composition with professional lighting. Wide dynamic range, dramatic highlights, storytelling feel.",
-    # ... you can keep remaining styles as in your original file ...
+    "Smart": "A clean, balanced, and polished look. Professional yet neutral.",
+    "Cinematic": "Film-style composition with professional lighting.",
+    # ... keep the rest if you want ...
 }
 
 # ---------------- Helpers ----------------
@@ -280,7 +271,6 @@ def overlay_logo_on_image(image_bytes, logo_bytes, placement="bottom-right", sca
     else:
         x = (base_w - new_logo_w) // 2
 
-    # clamp coords to keep logo inside canvas
     x = max(0, min(x, base_w - new_logo_w))
     y = max(0, min(y, base_h - new_logo_h))
 
@@ -289,45 +279,13 @@ def overlay_logo_on_image(image_bytes, logo_bytes, placement="bottom-right", sca
     base.save(out, format="PNG")
     return out.getvalue()
 
-# ---------------- Palette helpers (for HR department) ----------------
-def hex_to_rgb(hexstr):
-    h = hexstr.lstrip('#')
-    if len(h) == 3:
-        h = ''.join([c*2 for c in h])
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-def build_palette_image(hex_list):
-    rgbs = [hex_to_rgb(h) for h in hex_list]
-    flat = []
-    for (r, g, b) in rgbs:
-        flat.extend([r, g, b])
-    needed = 256 * 3 - len(flat)
-    if needed > 0:
-        flat.extend([0] * needed)
-    pal = Image.new('P', (16, 16))
-    pal.putpalette(flat)
-    return pal
-
-def apply_palette_to_bytes(image_bytes, hex_palette, dither=False):
-    try:
-        im = Image.open(BytesIO(image_bytes)).convert('RGB')
-    except Exception as e:
-        st.warning(f"apply_palette_to_bytes: failed to open image: {e}")
-        return image_bytes
-    pal_img = build_palette_image(hex_palette)
-    dither_flag = Image.FLOYDSTEINBERG if dither else 0
-    try:
-        q = im.quantize(palette=pal_img, dither=dither_flag)
-        out = q.convert('RGBA')
-        buf = BytesIO()
-        out.save(buf, format='PNG')
-        return buf.getvalue()
-    except Exception as e:
-        st.warning(f"apply_palette_to_bytes: quantize failed: {e}")
-        return image_bytes
-
 # ---------------- Core flows ----------------
 def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
+    """
+    Returns (list_of_image_bytes, enhanced_prompt_str)
+    This function will attempt to refine prompt via text model when dept != None and then
+    call Imagen. We use style_desc to nudge the model (e.g., palette hints, background).
+    """
     enhanced_prompt = prompt  # default
 
     if not VERTEX_AVAILABLE:
@@ -343,6 +301,7 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
         st.warning("Failed to initialize VertexAI.")
         return [], enhanced_prompt
 
+    # attempt text refinement when dept is selected
     if dept and dept != "None":
         text_model = get_text_model()
         if text_model:
@@ -351,6 +310,7 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
                 refinement_input = template.replace("{USER_PROMPT}", prompt)
                 if style_desc:
                     refinement_input += f"\n\nApply style: {style_desc}"
+                # generate refined prompt (text model)
                 text_resp = text_model.generate_content(refinement_input)
                 maybe = safe_get_enhanced_text(text_resp).strip()
                 cleaned = sanitize_prompt(maybe)
@@ -366,6 +326,7 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
         return [], enhanced_prompt
 
     try:
+        # call Imagen with the (possibly refined) prompt
         resp = imagen.generate_images(prompt=enhanced_prompt, number_of_images=n_images)
     except Exception as e:
         st.error(f"Imagen generate_images failed: {e}")
@@ -380,6 +341,7 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
     return out, enhanced_prompt
 
 def run_edit_flow(edit_prompt, base_bytes):
+    """Use Nano Banana (Gemini image gen) to apply edits to base_bytes."""
     if not VERTEX_AVAILABLE:
         st.warning("VertexAI SDK not available — editing disabled.")
         return None
@@ -428,13 +390,12 @@ Instructions:
 left_col, right_col = st.columns([3,1])
 
 with left_col:
-
     # Controls
     dept = st.selectbox("🏢 Department ", list(PROMPT_TEMPLATES.keys()), index=0)
     style = st.selectbox("🎨 Style ", list(STYLE_DESCRIPTIONS.keys()), index=0)
     style_desc = "" if style == "None" else STYLE_DESCRIPTIONS.get(style, "")
 
-    # HR-specific palette UI
+    # HR-specific palette UI (prompt-only approach)
     hr_palette_choice = None
     hr_palette_hex = None
     if dept == "HR":
@@ -451,13 +412,26 @@ with left_col:
             hr_palette_hex = [
                 "#00E9FF",
                 "#CEF600",
-                "#FFF000",   # corrected to valid 6-digit hex
+                "#FFF000",
                 "#FF7327",
                 "#FF5894",
             ]
-        st.caption(f"HR palette: {', '.join(hr_palette_hex)}")
-        # also nudge style_desc so prompt refinement knows about palette
-        style_desc += " Use only the following color palette: " + ", ".join(hr_palette_hex) + "."
+        st.caption(f"HR palette (prompt-only): {', '.join(hr_palette_hex)}")
+
+    # Option: force white background by adding it to the prompt instructions
+    force_white_bg = st.checkbox("Force white background (prompt-only)", value=True)
+    if force_white_bg:
+        style_desc = (style_desc + " ").strip() + " Use a clean pure white background."
+
+    # Also nudge Imagen to favor HR palette if HR dept selected (prompt-only)
+    if dept == "HR" and hr_palette_hex:
+        # append palette hint to style_desc so text-refiner can include it
+        style_desc = (style_desc + " ").strip() + " Use only these colors: " + ", ".join(hr_palette_hex) + "."
+        # optional: request poster-style or photorealistic depending on tone
+        if hr_palette_choice == "serious":
+            style_desc += " Tone: formal and professional, minimal playful elements."
+        else:
+            style_desc += " Tone: friendly and approachable, warm atmosphere."
 
     # Editor upload
     uploaded_file = st.file_uploader("Upload an image to edit ", type=["png","jpg","jpeg","webp"])
@@ -551,8 +525,9 @@ with left_col:
                     else:
                         st.error("Editing failed or returned no image.")
             else:
-                # GENERATION flow (Imagen)
+                # GENERATION flow (Imagen) — prompt-only palette + white background approach
                 with st.spinner("Generating images..."):
+                    # We pass style_desc (which may contain palette/background hints) into the refinement step
                     generated, enhanced = generate_images_from_prompt(prompt_text, dept=dept, style_desc=style_desc, n_images=num_images)
                     if generated:
                         st.success(f"Generated {len(generated)} image(s).")
@@ -565,14 +540,6 @@ with left_col:
                                 except Exception as e:
                                     st.warning(f"Logo overlay failed, saving original generated image. ({e})")
                                     out_bytes = b
-
-                            # If HR department selected and palette chosen, enforce palette
-                            if dept == "HR" and hr_palette_hex:
-                                try:
-                                    # use dither=False for exact palette; set True for smoother look
-                                    out_bytes = apply_palette_to_bytes(out_bytes, hr_palette_hex, dither=False)
-                                except Exception as e:
-                                    st.warning(f"Palette enforcement failed, using original image: {e}")
 
                             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                             fname = f"outputs/generated/gen_{ts}_{i}.png"
@@ -655,7 +622,6 @@ with left_col:
 
 # ---------------- Right column: smaller history + controls ----------------
 with right_col:
-
     max_it = 100
     st.session_state["max_edit_iterations"] = int(max_it)
 
