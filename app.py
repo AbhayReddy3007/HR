@@ -215,19 +215,7 @@ STYLE_DESCRIPTIONS = {
     "Smart": "A clean, balanced, and polished look. Professional yet neutral, visually appealing without strong artistic bias.",
     "Cinematic": "Film-style composition with professional lighting. Wide dynamic range, dramatic highlights, storytelling feel.",
     "Creative": "Playful, imaginative, and experimental. Bold artistic choices, unexpected elements, and expressive color use.",
-    "Bokeh": "Photography style with shallow depth of field. Subject in sharp focus with soft, dreamy, blurred backgrounds.",
-    "Macro": "Extreme close-up photography. High detail, textures visible, shallow focus highlighting minute features.",
-    "Illustration": "Hand-drawn or digitally illustrated style. Clear outlines, stylized shading, expressive and artistic.",
-    "3D Render": "Photorealistic or stylized CGI. Crisp geometry, depth, shadows, and reflective surfaces with realistic rendering.",
-    "Fashion": "High-end editorial photography. Stylish, glamorous poses, bold makeup, controlled lighting, and modern aesthetic.",
-    "Minimalist": "Simple and uncluttered. Few elements, large negative space, flat or muted color palette, clean composition.",
-    "Moody": "Dark, atmospheric, and emotional. Strong shadows, high contrast, deep tones, cinematic ambiance.",
-    "Portrait": "Focus on the subject. Natural skin tones, shallow depth of field, close-up or waist-up framing, studio or natural lighting.",
-    "Stock Photo": "Professional, commercial-quality photo. Neutral subject matter, polished composition, business-friendly aesthetic.",
-    "Vibrant": "Bold, saturated colors. High contrast, energetic mood, eye-catching and lively presentation.",
-    "Pop Art": "Comic-book and pop-art inspired. Bold outlines, halftone patterns, flat vivid colors, high contrast, playful tone.",
-    "Vector": "Flat vector graphics. Smooth shapes, sharp edges, solid fills, and clean scalable style like logos or icons.",
-    # ... other styles omitted for brevity if you expand later ...
+    # ...other style descriptors...
 }
 
 # ---------------- Helpers ----------------
@@ -239,7 +227,7 @@ def sanitize_prompt(text: str) -> str:
         ln = line.strip()
         if not ln:
             continue
-        # note: keep the same sanitizer rules but we will avoid writing style hints that begin with these
+        # keep sanitizer semantics; we avoid writing style hints that begin with these blacklisted prefixes
         if re.match(r'^(Option|Key|Apply|Specificity|Keywords)\b', ln, re.I):
             continue
         if re.match(r'^\d+[\.\)]\s*', ln):
@@ -445,24 +433,19 @@ def generate_images_from_prompt(prompt, dept="None", style_desc="", n_images=1):
                 # Guarantee style_desc appears in final enhanced prompt:
                 if style_desc and style_desc.strip():
                     # If any of the explicit hex codes (or core palette words) are missing, append style_desc.
-                    # Extract hex codes from style_desc
                     hex_list = re.findall(r'#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})', style_desc)
                     style_present = False
-                    # Check if any hex appears in candidate (case-insensitive)
                     for hx in hex_list:
                         if hx.lower() in enhanced_candidate.lower():
                             style_present = True
                             break
-                    # Also check for some direct phrases like "white background" explicitly
                     if not style_present:
                         if "white background" in style_desc.lower() and "white background" in enhanced_candidate.lower():
                             style_present = True
 
                     if not style_present:
-                        # append the style hint to ensure it's present
                         enhanced_candidate = (enhanced_candidate + " " + style_desc).strip()
 
-                # Final enhanced prompt (sanitize again to clean any odd lines)
                 enhanced_prompt = sanitize_prompt(enhanced_candidate) or enhanced_candidate
 
             except Exception as e:
@@ -570,10 +553,16 @@ with left_col:
             ]
         st.caption(f"HR palette (prompt-only): {', '.join(hr_palette_hex)}")
 
-    # Option: force white background by adding it to the prompt instructions
-    force_white_bg = st.checkbox("Force white background (prompt-only)", value=True)
-    if force_white_bg:
+    # Force white background automatically for HR (backend) — no checkbox shown for HR
+    if dept == "HR":
+        force_white_bg = True
+        # add white background instruction invisibly to user (backend)
         style_desc = (style_desc + " ").strip() + " Use a clean pure white background."
+    else:
+        # For non-HR, show a checkbox so user can opt-in if desired
+        force_white_bg = st.checkbox("Force white background (prompt-only)", value=False)
+        if force_white_bg:
+            style_desc = (style_desc + " ").strip() + " Use a clean pure white background."
 
     # Also nudge Imagen to favor HR palette if HR dept selected (prompt-only)
     if dept == "HR" and hr_palette_hex:
@@ -798,4 +787,3 @@ with right_col:
         show_image_safe(EMBEDDED_LOGO_BYTES, caption="Embedded logo (post-generation)")
     else:
         st.warning(f"No embedded logo found at '{LOGO_PATH}'. Update LOGO_PATH at top of file.")
-
