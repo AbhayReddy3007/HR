@@ -1,11 +1,33 @@
-Create a minimalistic and modern poster about Deep Learning, where all text is written in Circular Std Bold.
-The poster should include the following text:
+Create a clean, flat, poster-style HR recruitment poster on a pure white background. Use bold, simple geometry and large flat color blocks (no textures or gradients). Layout and typography instructions — place elements exactly as described:
 
-Deep Learning
-Unlocking the power of neural networks to mimic human intelligence.
-AI • Neural Networks • Machine Learning • Innovation
+Top area (large headline, centered):
+HEADLINE: "JOIN OUR TEAM"
 
-Keep every line in Circular Std Bold, with balanced spacing, consistent kerning, and clear visual hierarchy.
-The title “Deep Learning” should be large and bold, the subtitle slightly smaller, and the tagline at the bottom in the same font but lighter emphasis (not smaller).
-Use a clean white or subtle gradient background with sharp contrast so the text stands out clearly.
-The overall style should feel futuristic, minimal, and professional — suitable for an AI or technology theme.
+Below headline (medium subtitle, centered):
+SUBTITLE: "Grow • Belong • Succeed"
+
+Body area (left column — bulleted benefits, each on its own line):
+- "Competitive pay and benefits"
+- "Flexible working hours"
+- "Clear career paths and mentorship"
+- "Inclusive, diverse culture"
+
+Body area (right column — short role descriptions, each on its own line):
+- "Product Manager — Lead feature strategy"
+- "Software Engineer — Build reliable systems"
+- "UX Designer — Create delightful experiences"
+- "People Ops — Support employee growth"
+
+Call to action (large, centered button-style area near bottom):
+CTA LINE: "Apply Now — careers@example.com"
+
+Footer (small legal / contact, centered at very bottom):
+FOOTER: "Equal opportunity employer • Visit example.com/careers • +1 (555) 123-4567"
+
+Design details:
+- Large typographic hierarchy: headline largest, CTA prominent, footer smallest.
+- Use clear spacing and left/right two-column body alignment as described.
+- Leave a small empty top-right corner area (about 8% of width) for a logo.
+- Render the on-image text exactly as written (keep punctuation, capitalization).
+- Poster-style, flat color blocks for clothing/props that strongly favor the HR palette you were given; keep the background pure white.
+- Avoid photoreal textures — prefer vector/graphic look so palette colors appear as solid blocks.
